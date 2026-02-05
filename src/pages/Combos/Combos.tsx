@@ -210,6 +210,12 @@ export function Combos() {
   };
 
   const salvarCombo = async () => {
+  console.log('🚀 Iniciando salvamento...', { formData, produtosSelecionados });
+  
+  // SEMPRE garantir que loading comece false e termine false
+  setIsLoading(true);
+  
+  try {
     if (!formData.nome.trim()) {
       toast.error('Nome do combo é obrigatório');
       return;
@@ -224,83 +230,109 @@ export function Combos() {
     const produtosDoCombo = Object.entries(produtosSelecionados)
       .filter(([, qtd]) => qtd > 0);
 
+    console.log('📦 Produtos filtrados:', produtosDoCombo);
+
     if (produtosDoCombo.length === 0) {
       toast.error('Selecione pelo menos um produto');
       return;
     }
 
-    const valorTotalProdutos = calcularValorTotalProdutos();
+  const resetForm = () => {
+    setFormData({
+      nome: '',
+      descricao: '',
+      valor_venda: '',
+      feito_pela_cozinha: false,
+      ativo: true,
+    });
+    setPreviewImage(null);
+    setProdutosSelecionados({});
+    setComboSelecionado(null);
+};
 
-    setIsLoading(true);
+  const valorTotalProdutos = calcularValorTotalProdutos();
 
-    const dadosCombo = {
-      nome: formData.nome,
-      descricao: formData.descricao || null,
-      foto_url: previewImage,
-      valor_total_produtos: valorTotalProdutos,
-      valor_venda: valorVenda,
-      feito_pela_cozinha: formData.feito_pela_cozinha,
-      ativo: formData.ativo,
-    };
+      const dadosCombo = {
+        nome: formData.nome,
+        descricao: formData.descricao || null,
+        foto_url: previewImage,
+        valor_total_produtos: valorTotalProdutos,
+        valor_venda: valorVenda,
+        feito_pela_cozinha: formData.feito_pela_cozinha,
+        ativo: formData.ativo,
+      };
 
-    let comboId: string;
+      console.log('💾 Dados do combo:', dadosCombo);
 
-    if (comboSelecionado) {
-      // Atualizar combo
-      const { error } = await supabase
-        .from('combos')
-        .update(dadosCombo)
-        .eq('id', comboSelecionado.id);
+      let comboId: string;
 
-      if (error) {
-        toast.error('Erro ao atualizar combo');
-        setIsLoading(false);
-        return;
+      if (comboSelecionado) {
+        console.log('✏️ Modo: ATUALIZAR combo existente');
+        const { error } = await supabase
+          .from('combos')
+          .update(dadosCombo)
+          .eq('id', comboSelecionado.id);
+
+        if (error) {
+          console.error('❌ Erro no update:', error);
+          toast.error('Erro ao atualizar combo: ' + error.message);
+          return;
+        }
+        comboId = comboSelecionado.id;
+
+        // Remover produtos antigos
+        await supabase
+          .from('combo_produtos')
+          .delete()
+          .eq('combo_id', comboId);
+      } else {
+        console.log('➕ Modo: CRIAR novo combo');
+        const { data, error } = await supabase
+          .from('combos')
+          .insert(dadosCombo)
+          .select()
+          .single();
+
+        if (error || !data) {
+          console.error('❌ Erro no insert:', error);
+          toast.error('Erro ao criar combo: ' + (error?.message || 'Sem dados retornados'));
+          return;
+        }
+        comboId = data.id;
+        console.log('✅ Combo criado com ID:', comboId);
       }
-      comboId = comboSelecionado.id;
 
-      // Remover produtos antigos
-      await supabase
+      // Inserir produtos do combo
+      const produtosInsert = produtosDoCombo.map(([produtoId, quantidade]) => ({
+        combo_id: comboId,
+        produto_id: produtoId,
+        quantidade,
+      }));
+
+      const { error: prodError } = await supabase
         .from('combo_produtos')
-        .delete()
-        .eq('combo_id', comboId);
-    } else {
-      // Criar combo
-      const { data, error } = await supabase
-        .from('combos')
-        .insert(dadosCombo)
-        .select()
-        .single();
+        .insert(produtosInsert);
 
-      if (error || !data) {
-        toast.error('Erro ao criar combo');
-        setIsLoading(false);
+      if (prodError) {
+        console.error('❌ Erro ao associar produtos:', prodError);
+        toast.error('Erro ao associar produtos: ' + prodError.message);
         return;
       }
-      comboId = data.id;
-    }
 
-    // Inserir produtos do combo
-    const produtosInsert = produtosDoCombo.map(([produtoId, quantidade]) => ({
-      combo_id: comboId,
-      produto_id: produtoId,
-      quantidade,
-    }));
-
-    const { error: prodError } = await supabase
-      .from('combo_produtos')
-      .insert(produtosInsert);
-
-    if (prodError) {
-      toast.error('Erro ao associar produtos');
+      console.log('🎉 SUCESSO! Combo salvo.');
+      setDialogOpen(false);
+      resetForm(); // Resetar formulário após sucesso
+      await fetchCombos();
+      toast.success(comboSelecionado ? 'Combo atualizado!' : 'Combo criado!');
+      
+    } catch (err: any) {
+      console.error('💥 Erro inesperado:', err);
+      toast.error('Erro inesperado: ' + err.message);
+    } finally {
+      // SEMPRE desativar loading, independente do resultado
+      console.log('🏁 Finalizando - setIsLoading(false)');
       setIsLoading(false);
-      return;
     }
-
-    setDialogOpen(false);
-    fetchCombos();
-    setIsLoading(false);
-    toast.success(comboSelecionado ? 'Combo atualizado!' : 'Combo criado!');
   };
 
   const confirmarExclusao = (combo: Combo) => {
@@ -313,21 +345,41 @@ export function Combos() {
 
     setIsLoading(true);
 
-    const { error } = await supabase
-      .from('combos')
-      .update({ ativo: false })
-      .eq('id', comboSelecionado.id);
+    try {
+      // Primeiro deletar os produtos associados (combo_produtos)
+      const { error: errorProdutos } = await supabase
+        .from('combo_produtos')
+        .delete()
+        .eq('combo_id', comboSelecionado.id);
 
-    if (error) {
-      toast.error('Erro ao desativar combo');
+      if (errorProdutos) {
+        console.error('Erro ao deletar produtos do combo:', errorProdutos);
+        toast.error('Erro ao remover produtos do combo');
+        return;
+      }
+
+      // Depois deletar o combo
+      const { error } = await supabase
+        .from('combos')
+        .delete()
+        .eq('id', comboSelecionado.id);
+
+      if (error) {
+        console.error('Erro ao deletar combo:', error);
+        toast.error('Erro ao excluir combo: ' + error.message);
+        return;
+      }
+
+      setDeleteDialogOpen(false);
+      await fetchCombos();
+      toast.success('Combo excluído permanentemente!');
+    } catch (err: any) {
+      console.error('Erro inesperado:', err);
+      toast.error('Erro ao excluir: ' + err.message);
+    } finally {
       setIsLoading(false);
-      return;
+      setComboSelecionado(null);
     }
-
-    setDeleteDialogOpen(false);
-    fetchCombos();
-    setIsLoading(false);
-    toast.success('Combo desativado!');
   };
 
   const alterarQuantidade = (produtoId: string, delta: number) => {
@@ -613,16 +665,16 @@ export function Combos() {
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Desativar Combo?</AlertDialogTitle>
+            <AlertDialogTitle>Excluir Combo?</AlertDialogTitle>
             <AlertDialogDescription>
-              O combo "{comboSelecionado?.nome}" será desativado.
-              Você pode reativá-lo posteriormente.
+              O combo "{comboSelecionado?.nome}" será excluido.
+              Você não pode reativá-lo posteriormente.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancelar</AlertDialogCancel>
             <AlertDialogAction onClick={excluirCombo} disabled={isLoading}>
-              Desativar
+              Excluir
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

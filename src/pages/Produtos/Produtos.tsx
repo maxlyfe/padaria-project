@@ -1,40 +1,46 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/services/supabase';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Card, CardContent } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
-import { Badge } from '@/components/ui/badge';
-import { 
-  ArrowLeft, 
-  Plus, 
-  Search, 
-  Pencil, 
-  Trash2, 
-  Upload,
-  ChefHat,
-  Image as ImageIcon
-} from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
-import { toast } from 'sonner';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog,
   DialogContent,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from '@/components/ui/dialog';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { Badge } from '@/components/ui/badge';
+import { toast } from 'sonner';
+import {
+  Plus,
+  Search,
+  MoreVertical,
+  Pencil,
+  Trash2,
+  Upload,
+  ChefHat,
+  Package,
+  ArrowLeft,
+} from 'lucide-react';
 
 interface Produto {
   id: string;
@@ -45,24 +51,21 @@ interface Produto {
   feito_pela_cozinha: boolean;
   ativo: boolean;
   categoria: string | null;
+  created_at: string;
 }
 
 export function Produtos() {
+  const { profile } = useAuth();
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  
+
   const [produtos, setProdutos] = useState<Produto[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  
-  // Dialog states
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [produtoSelecionado, setProdutoSelecionado] = useState<Produto | null>(null);
-  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [editingProduto, setEditingProduto] = useState<Produto | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
-  
-  // Form state
+
   const [formData, setFormData] = useState({
     nome: '',
     descricao: '',
@@ -70,306 +73,403 @@ export function Produtos() {
     categoria: '',
     feito_pela_cozinha: false,
     ativo: true,
+    foto_url: '',
   });
 
+  // Verificar se é admin
   useEffect(() => {
-    fetchProdutos();
+    if (profile?.role !== 'admin') {
+      toast.error('Acesso negado');
+      navigate('/dashboard');
+    }
+  }, [profile, navigate]);
+
+  // Carregar produtos
+  const loadProdutos = async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('produtos')
+        .select('*')
+        .order('nome');
+
+      if (error) throw error;
+      setProdutos(data || []);
+    } catch (error: any) {
+      toast.error('Erro ao carregar produtos: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadProdutos();
   }, []);
 
-  const fetchProdutos = async () => {
-    const { data, error } = await supabase
-      .from('produtos')
-      .select('*')
-      .order('nome');
-
-    if (error) {
-      toast.error('Erro ao carregar produtos');
-      return;
-    }
-
-    setProdutos(data || []);
-  };
-
-  const handleImageUpload = async (file: File) => {
-    if (!file) return;
-
-    setUploadingImage(true);
-    
-    // Preview local
-    const reader = new FileReader();
-    reader.onloadend = () => setPreviewImage(reader.result as string);
-    reader.readAsDataURL(file);
-
-    // Upload para Supabase Storage
-    const fileExt = file.name.split('.').pop();
-    const fileName = `${Date.now()}.${fileExt}`;
-    
-    const { error: uploadError } = await supabase.storage
-      .from('produtos')
-      .upload(fileName, file);
-
-    if (uploadError) {
-      toast.error('Erro ao fazer upload da imagem');
-      setUploadingImage(false);
-      return;
-    }
-
-    const { data: { publicUrl } } = supabase.storage
-      .from('produtos')
-      .getPublicUrl(fileName);
-
-    setPreviewImage(publicUrl);
-    setUploadingImage(false);
-    return publicUrl;
-  };
-
-  const abrirDialog = (produto?: Produto) => {
-    if (produto) {
-      setProdutoSelecionado(produto);
-      setFormData({
-        nome: produto.nome,
-        descricao: produto.descricao || '',
-        valor: produto.valor.toString(),
-        categoria: produto.categoria || '',
-        feito_pela_cozinha: produto.feito_pela_cozinha,
-        ativo: produto.ativo,
-      });
-      setPreviewImage(produto.foto_url);
-    } else {
-      setProdutoSelecionado(null);
-      setFormData({
-        nome: '',
-        descricao: '',
-        valor: '',
-        categoria: '',
-        feito_pela_cozinha: false,
-        ativo: true,
-      });
-      setPreviewImage(null);
-    }
-    setDialogOpen(true);
-  };
-
-  const salvarProduto = async () => {
-    if (!formData.nome.trim()) {
-      toast.error('Nome do produto é obrigatório');
-      return;
-    }
-
-    const valor = parseFloat(formData.valor);
-    if (isNaN(valor) || valor < 0) {
-      toast.error('Valor inválido');
-      return;
-    }
-
-    setIsLoading(true);
-
-    const dados = {
-      nome: formData.nome,
-      descricao: formData.descricao || null,
-      valor,
-      foto_url: previewImage,
-      categoria: formData.categoria || null,
-      feito_pela_cozinha: formData.feito_pela_cozinha,
-      ativo: formData.ativo,
-    };
-
-    if (produtoSelecionado) {
-      // Atualizar
-      const { error } = await supabase
-        .from('produtos')
-        .update(dados)
-        .eq('id', produtoSelecionado.id);
-
-      if (error) {
-        toast.error('Erro ao atualizar produto');
-        setIsLoading(false);
-        return;
-      }
-      toast.success('Produto atualizado!');
-    } else {
-      // Criar
-      const { error } = await supabase
-        .from('produtos')
-        .insert(dados);
-
-      if (error) {
-        toast.error('Erro ao criar produto');
-        setIsLoading(false);
-        return;
-      }
-      toast.success('Produto criado!');
-    }
-
-    setDialogOpen(false);
-    fetchProdutos();
-    setIsLoading(false);
-  };
-
-  const confirmarExclusao = (produto: Produto) => {
-    setProdutoSelecionado(produto);
-    setDeleteDialogOpen(true);
-  };
-
-  const excluirProduto = async () => {
-    if (!produtoSelecionado) return;
-
-    setIsLoading(true);
-
-    // Soft delete - apenas desativa
-    const { error } = await supabase
-      .from('produtos')
-      .update({ ativo: false })
-      .eq('id', produtoSelecionado.id);
-
-    if (error) {
-      toast.error('Erro ao desativar produto');
-      setIsLoading(false);
-      return;
-    }
-
-    setDeleteDialogOpen(false);
-    fetchProdutos();
-    setIsLoading(false);
-    toast.success('Produto desativado!');
-  };
-
-  const produtosFiltrados = produtos.filter(p =>
+  // Filtrar produtos
+  const produtosFiltrados = produtos.filter((p) =>
     p.nome.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (p.categoria && p.categoria.toLowerCase().includes(searchTerm.toLowerCase()))
+    p.categoria?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  // Upload de imagem
+  const handleImageUpload = async (file: File) => {
+    try {
+      setUploadingImage(true);
+      
+      // Validar arquivo
+      if (!file.type.startsWith('image/')) {
+        toast.error('O arquivo deve ser uma imagem');
+        return;
+      }
+      
+      if (file.size > 2 * 1024 * 1024) {
+        toast.error('A imagem deve ter no máximo 2MB');
+        return;
+      }
+
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
+      const filePath = `${fileName}`;
+
+      // Upload para o Supabase Storage
+      const { error: uploadError } = await supabase.storage
+        .from('produtos')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false,
+        });
+
+      if (uploadError) throw uploadError;
+
+      // Obter URL pública
+      const { data: { publicUrl } } = supabase.storage
+        .from('produtos')
+        .getPublicUrl(filePath);
+
+      setFormData((prev) => ({ ...prev, foto_url: publicUrl }));
+      toast.success('Imagem carregada com sucesso');
+    } catch (error: any) {
+      toast.error('Erro ao fazer upload: ' + error.message);
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  // Salvar produto
+  const handleSave = async () => {
+    try {
+      if (!formData.nome.trim()) {
+        toast.error('O nome do produto é obrigatório');
+        return;
+      }
+
+      if (!formData.valor || parseFloat(formData.valor) <= 0) {
+        toast.error('O valor deve ser maior que zero');
+        return;
+      }
+
+      const produtoData = {
+        nome: formData.nome.trim(),
+        descricao: formData.descricao.trim() || null,
+        valor: parseFloat(formData.valor),
+        categoria: formData.categoria.trim() || null,
+        feito_pela_cozinha: formData.feito_pela_cozinha,
+        ativo: formData.ativo,
+        foto_url: formData.foto_url || null,
+      };
+
+      if (editingProduto) {
+        // Atualizar
+        const { error } = await supabase
+          .from('produtos')
+          .update(produtoData)
+          .eq('id', editingProduto.id);
+
+        if (error) throw error;
+        toast.success('Produto atualizado com sucesso');
+      } else {
+        // Criar novo
+        const { error } = await supabase
+          .from('produtos')
+          .insert([produtoData]);
+
+        if (error) throw error;
+        toast.success('Produto criado com sucesso');
+      }
+
+      setIsDialogOpen(false);
+      resetForm();
+      loadProdutos();
+    } catch (error: any) {
+      toast.error('Erro ao salvar: ' + error.message);
+    }
+  };
+
+  // Deletar produto
+  const handleDelete = async (id: string) => {
+    if (!confirm('Tem certeza que deseja excluir este produto?')) return;
+
+    try {
+      const { error } = await supabase
+        .from('produtos')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      toast.success('Produto excluído com sucesso');
+      loadProdutos();
+    } catch (error: any) {
+      toast.error('Erro ao excluir: ' + error.message);
+    }
+  };
+
+  // Abrir dialog para editar
+  const handleEdit = (produto: Produto) => {
+    setEditingProduto(produto);
+    setFormData({
+      nome: produto.nome,
+      descricao: produto.descricao || '',
+      valor: produto.valor.toString(),
+      categoria: produto.categoria || '',
+      feito_pela_cozinha: produto.feito_pela_cozinha,
+      ativo: produto.ativo,
+      foto_url: produto.foto_url || '',
+    });
+    setIsDialogOpen(true);
+  };
+
+  // Abrir dialog para novo
+  const handleNew = () => {
+    setEditingProduto(null);
+    resetForm();
+    setIsDialogOpen(true);
+  };
+
+  // Resetar formulário
+  const resetForm = () => {
+    setFormData({
+      nome: '',
+      descricao: '',
+      valor: '',
+      categoria: '',
+      feito_pela_cozinha: false,
+      ativo: true,
+      foto_url: '',
+    });
+  };
+
+  // Formatar valor em reais
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(value);
+  };
+
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b bg-card">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Button variant="ghost" size="icon" onClick={() => navigate('/admin')}>
-                <ArrowLeft className="h-5 w-5" />
-              </Button>
-              <div>
-                <h1 className="text-xl font-bold">Produtos</h1>
-                <p className="text-sm text-muted-foreground">
-                  {produtos.filter(p => p.ativo).length} ativos
-                </p>
-              </div>
-            </div>
-            <Button onClick={() => abrirDialog()}>
-              <Plus className="h-4 w-4 mr-2" />
+    <div className="min-h-screen bg-background p-4 md:p-8">
+      <div className="mx-auto max-w-7xl space-y-6">
+        {/* Header */}
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Produtos</h1>
+            <p className="text-muted-foreground">
+              Gerencie os produtos da padaria
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => navigate('/admin')}>
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Voltar
+            </Button>
+            <Button onClick={handleNew}>
+              <Plus className="mr-2 h-4 w-4" />
               Novo Produto
             </Button>
           </div>
         </div>
-      </header>
 
-      {/* Main Content */}
-      <main className="container mx-auto px-4 py-4">
-        {/* Search */}
-        <div className="relative mb-4">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Buscar produto..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-9"
-          />
-        </div>
+        {/* Filtros */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Filtros</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="relative">
+              <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Buscar por nome ou categoria..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+          </CardContent>
+        </Card>
 
-        {/* Products Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {produtosFiltrados.map((produto) => (
-            <Card key={produto.id} className={!produto.ativo ? 'opacity-60' : ''}>
-              <CardContent className="p-4">
-                <div className="flex gap-4">
-                  <div className="h-20 w-20 bg-muted rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden">
-                    {produto.foto_url ? (
-                      <img 
-                        src={produto.foto_url} 
-                        alt={produto.nome}
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      <ImageIcon className="h-8 w-8 text-muted-foreground" />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <h3 className="font-medium truncate">{produto.nome}</h3>
-                        <p className="text-lg font-bold text-primary">
-                          R$ {produto.valor.toFixed(2)}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 mt-1">
-                      {produto.categoria && (
-                        <Badge variant="outline" className="text-xs">
-                          {produto.categoria}
-                        </Badge>
-                      )}
-                      {produto.feito_pela_cozinha && (
-                        <ChefHat className="h-4 w-4 text-orange-500" />
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex gap-2 mt-4">
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    className="flex-1"
-                    onClick={() => abrirDialog(produto)}
-                  >
-                    <Pencil className="h-4 w-4 mr-1" />
-                    Editar
-                  </Button>
-                  <Button 
-                    variant="outline" 
-                    size="sm"
-                    onClick={() => confirmarExclusao(produto)}
-                  >
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+        {/* Lista de Produtos */}
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              Produtos ({produtosFiltrados.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {loading ? (
+              <div className="flex h-32 items-center justify-center">
+                <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+              </div>
+            ) : produtosFiltrados.length === 0 ? (
+              <div className="flex h-32 flex-col items-center justify-center text-center">
+                <Package className="h-12 w-12 text-muted-foreground" />
+                <p className="mt-2 text-lg font-medium">Nenhum produto encontrado</p>
+                <p className="text-sm text-muted-foreground">
+                  Clique em "Novo Produto" para adicionar
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Foto</TableHead>
+                      <TableHead>Nome</TableHead>
+                      <TableHead>Categoria</TableHead>
+                      <TableHead>Valor</TableHead>
+                      <TableHead>Cozinha</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="w-[100px]">Ações</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {produtosFiltrados.map((produto) => (
+                      <TableRow key={produto.id}>
+                        <TableCell>
+                          {produto.foto_url ? (
+                            <img
+                              src={produto.foto_url}
+                              alt={produto.nome}
+                              className="h-12 w-12 rounded-lg object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-muted">
+                              <Package className="h-6 w-6 text-muted-foreground" />
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell className="font-medium">
+                          {produto.nome}
+                          {produto.descricao && (
+                            <p className="text-xs text-muted-foreground line-clamp-1">
+                              {produto.descricao}
+                            </p>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {produto.categoria ? (
+                            <Badge variant="secondary">{produto.categoria}</Badge>
+                          ) : (
+                            <span className="text-muted-foreground">-</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="font-mono">
+                          {formatCurrency(produto.valor)}
+                        </TableCell>
+                        <TableCell>
+                          {produto.feito_pela_cozinha ? (
+                            <Badge variant="default" className="gap-1">
+                              <ChefHat className="h-3 w-3" />
+                              Sim
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline">Não</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {produto.ativo ? (
+                            <Badge className="bg-green-500">Ativo</Badge>
+                          ) : (
+                            <Badge variant="destructive">Inativo</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon">
+                                <MoreVertical className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => handleEdit(produto)}>
+                                <Pencil className="mr-2 h-4 w-4" />
+                                Editar
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                className="text-destructive"
+                                onClick={() => handleDelete(produto.id)}
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                Excluir
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
-        {produtosFiltrados.length === 0 && (
-          <div className="text-center py-12 text-muted-foreground">
-            Nenhum produto encontrado
-          </div>
-        )}
-      </main>
-
-      {/* Dialog Criar/Editar */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-lg">
+      {/* Dialog de Cadastro/Edição */}
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
-              {produtoSelecionado ? 'Editar Produto' : 'Novo Produto'}
+              {editingProduto ? 'Editar Produto' : 'Novo Produto'}
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 py-4">
-            {/* Imagem */}
-            <div className="flex justify-center">
-              <div 
-                className="h-32 w-32 bg-muted rounded-lg flex items-center justify-center cursor-pointer hover:bg-muted/80 transition-colors overflow-hidden border-2 border-dashed border-muted-foreground/25"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                {previewImage ? (
-                  <img 
-                    src={previewImage} 
-                    alt="Preview" 
-                    className="h-full w-full object-cover"
-                  />
+
+          <div className="grid gap-6 py-4">
+            {/* Upload de Imagem */}
+            <div className="space-y-2">
+              <Label>Foto do Produto</Label>
+              <div className="flex items-center gap-4">
+                {formData.foto_url ? (
+                  <div className="relative">
+                    <img
+                      src={formData.foto_url}
+                      alt="Preview"
+                      className="h-32 w-32 rounded-lg object-cover"
+                    />
+                    <Button
+                      variant="destructive"
+                      size="icon"
+                      className="absolute -right-2 -top-2 h-6 w-6"
+                      onClick={() => setFormData((d) => ({ ...d, foto_url: '' }))}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
                 ) : (
-                  <div className="text-center p-4">
-                    <Upload className="h-8 w-8 mx-auto text-muted-foreground" />
-                    <span className="text-xs text-muted-foreground">Adicionar foto</span>
+                  <div
+                    className="flex h-32 w-32 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-muted-foreground/25 hover:border-primary"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    {uploadingImage ? (
+                      <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                    ) : (
+                      <>
+                        <Upload className="h-8 w-8 text-muted-foreground" />
+                        <span className="mt-1 text-xs text-muted-foreground">
+                          Adicionar foto
+                        </span>
+                      </>
+                    )}
                   </div>
                 )}
                 <input
@@ -377,22 +477,29 @@ export function Produtos() {
                   type="file"
                   accept="image/*"
                   className="hidden"
-                  onChange={(e) => e.target.files?.[0] && handleImageUpload(e.target.files[0])}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleImageUpload(file);
+                  }}
                 />
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="nome">Nome *</Label>
-              <Input
-                id="nome"
-                value={formData.nome}
-                onChange={(e) => setFormData(d => ({ ...d, nome: e.target.value }))}
-                placeholder="Nome do produto"
-              />
-            </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              {/* Nome */}
+              <div className="space-y-2 md:col-span-2">
+                <Label htmlFor="nome">Nome *</Label>
+                <Input
+                  id="nome"
+                  value={formData.nome}
+                  onChange={(e) =>
+                    setFormData((d) => ({ ...d, nome: e.target.value }))
+                  }
+                  placeholder="Nome do produto"
+                />
+              </div>
 
-            <div className="grid grid-cols-2 gap-4">
+              {/* Valor */}
               <div className="space-y-2">
                 <Label htmlFor="valor">Valor (R$) *</Label>
                 <Input
@@ -401,47 +508,62 @@ export function Produtos() {
                   step="0.01"
                   min="0"
                   value={formData.valor}
-                  onChange={(e) => setFormData(d => ({ ...d, valor: e.target.value }))}
+                  onChange={(e) =>
+                    setFormData((d) => ({ ...d, valor: e.target.value }))
+                  }
                   placeholder="0,00"
                 />
               </div>
+
+              {/* Categoria */}
               <div className="space-y-2">
                 <Label htmlFor="categoria">Categoria</Label>
                 <Input
                   id="categoria"
                   value={formData.categoria}
-                  onChange={(e) => setFormData(d => ({ ...d, categoria: e.target.value }))}
-                  placeholder="Ex: Bebidas"
+                  onChange={(e) =>
+                    setFormData((d) => ({ ...d, categoria: e.target.value }))
+                  }
+                  placeholder="Ex: Bebidas, Salgados, Doces"
+                />
+              </div>
+
+              {/* Descrição */}
+              <div className="space-y-2 md:col-span-2">
+                <Label htmlFor="descricao">Descrição</Label>
+                <Input
+                  id="descricao"
+                  value={formData.descricao}
+                  onChange={(e) =>
+                    setFormData((d) => ({ ...d, descricao: e.target.value }))
+                  }
+                  placeholder="Descrição do produto"
                 />
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="descricao">Descrição</Label>
-              <Input
-                id="descricao"
-                value={formData.descricao}
-                onChange={(e) => setFormData(d => ({ ...d, descricao: e.target.value }))}
-                placeholder="Descrição do produto"
-              />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
+            {/* Switches */}
+            <div className="flex flex-col gap-4 sm:flex-row">
+              <div className="flex items-center space-x-2">
                 <Switch
                   id="cozinha"
                   checked={formData.feito_pela_cozinha}
-                  onCheckedChange={(v) => setFormData(d => ({ ...d, feito_pela_cozinha: v }))}
+                  onCheckedChange={(v) =>
+                    setFormData((d) => ({ ...d, feito_pela_cozinha: v }))
+                  }
                 />
                 <Label htmlFor="cozinha" className="cursor-pointer">
                   Feito pela cozinha
                 </Label>
               </div>
-              <div className="flex items-center gap-2">
+
+              <div className="flex items-center space-x-2">
                 <Switch
                   id="ativo"
                   checked={formData.ativo}
-                  onCheckedChange={(v) => setFormData(d => ({ ...d, ativo: v }))}
+                  onCheckedChange={(v) =>
+                    setFormData((d) => ({ ...d, ativo: v }))
+                  }
                 />
                 <Label htmlFor="ativo" className="cursor-pointer">
                   Ativo
@@ -449,35 +571,17 @@ export function Produtos() {
               </div>
             </div>
           </div>
+
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+            <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
               Cancelar
             </Button>
-            <Button onClick={salvarProduto} disabled={isLoading || uploadingImage}>
-              {isLoading ? 'Salvando...' : 'Salvar'}
+            <Button onClick={handleSave} disabled={uploadingImage}>
+              {editingProduto ? 'Atualizar' : 'Criar'} Produto
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* Dialog Confirmar Exclusão */}
-      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Desativar Produto?</AlertDialogTitle>
-            <AlertDialogDescription>
-              O produto "{produtoSelecionado?.nome}" será desativado.
-              Você pode reativá-lo posteriormente.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction onClick={excluirProduto} disabled={isLoading}>
-              Desativar
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }
