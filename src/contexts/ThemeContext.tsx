@@ -77,21 +77,18 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  // Evitar flash de tema incorreto
-  if (!mounted) {
-    return <>{children}</>;
-  }
+  // ✅ SEMPRE fornecer o contexto, mesmo antes do mount
+  // Usar valores padrão seguros durante o hydration
+  const contextValue: ThemeContextType = {
+    theme,
+    resolvedTheme: mounted ? resolvedTheme : 'light', // default 'light' antes do mount
+    setTheme,
+    toggleTheme,
+    isDark: mounted ? resolvedTheme === 'dark' : false, // default false antes do mount
+  };
 
   return (
-    <ThemeContext.Provider
-      value={{
-        theme,
-        resolvedTheme,
-        setTheme,
-        toggleTheme,
-        isDark: resolvedTheme === 'dark',
-      }}
-    >
+    <ThemeContext.Provider value={contextValue}>
       {children}
     </ThemeContext.Provider>
   );

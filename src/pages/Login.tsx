@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -16,21 +16,32 @@ export function Login() {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   
-  const { login, isAuthenticated, profile } = useAuth();
+  const { login, isAuthenticated, profile, isLoading: authLoading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Se já estiver autenticado, redirecionar
-  if (isAuthenticated && profile) {
-    const from = location.state?.from?.pathname;
-    const roleRedirects: Record<string, string> = {
-      admin: '/admin',
-      caixa: '/caixa',
-      cozinha: '/cozinha',
-      garcom: '/pdv',
-    };
-    navigate(from || roleRedirects[profile.role] || '/pdv', { replace: true });
-    return null;
+  // ✅ REDIRECIONAMENTO EM useEffect (não durante render)
+  useEffect(() => {
+    if (!authLoading && isAuthenticated && profile) {
+      const from = location.state?.from?.pathname;
+      const roleRedirects: Record<string, string> = {
+        admin: '/admin',
+        caixa: '/caixa',
+        cozinha: '/cozinha',
+        garcom: '/pdv',
+      };
+      navigate(from || roleRedirects[profile.role] || '/pdv', { replace: true });
+    }
+  }, [authLoading, isAuthenticated, profile, navigate, location.state]);
+
+  // Mostra loading enquanto verifica auth inicial
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-background p-4">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="mt-2 text-sm text-muted-foreground">Verificando sessão...</p>
+      </div>
+    );
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -38,16 +49,22 @@ export function Login() {
     setError('');
     setIsLoading(true);
 
-    const { error: loginError } = await login(email, password);
+    try {
+      const { error: loginError } = await login(email, password);
 
-    if (loginError) {
-      setError('Email ou senha incorretos');
+      if (loginError) {
+        setError(loginError.message || 'Email ou senha incorretos');
+        setIsLoading(false);
+        return;
+      }
+
+      // Sucesso - o useEffect acima vai cuidar do redirecionamento
+      
+    } catch (err) {
+      console.error('Erro no login:', err);
+      setError('Erro inesperado ao fazer login. Tente novamente.');
       setIsLoading(false);
-      return;
     }
-
-    // Login bem-sucedido - o redirecionamento acontece automaticamente
-    setIsLoading(false);
   };
 
   return (
